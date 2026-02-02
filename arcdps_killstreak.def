@@ -1,0 +1,4 @@
+LIBRARY arcdps_killstreak
+EXPORTS
+    get_init_addr
+    get_release_addr

@@ -1,0 +1,26 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.suo
+*.user
+*.sln.docstates
+
+# Compiled files
+*.dll
+*.exe
+*.obj
+*.o
+*.pdb
+*.lib
+*.exp
+*.ilk
+
+# IDE
+.idea/
+.vscode/
+*.swp
