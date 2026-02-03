@@ -1,4 +1,6 @@
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 #include <cstdint>
 #include <cstdio>
@@ -11,7 +13,7 @@
 // Plugin version
 #define PLUGIN_NAME "WvW Killstreak"
 #define PLUGIN_VERSION "1.0.0"
-#define PLUGIN_SIG 0xB0Z0F1 // Unique signature
+#define PLUGIN_SIG 0xB020F1 // Unique signature
 
 // Output file path (relative to GW2 directory)
 static const char* OUTPUT_FILE = "addons/arcdps/killstreak.txt";
