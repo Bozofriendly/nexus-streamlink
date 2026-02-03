@@ -7,31 +7,62 @@
 #include <cstring>
 #include <atomic>
 #include <mutex>
+#include <ctime>
+#include <cstdarg>
 
 #include "arcdps_structs.h"
 
 // Plugin version
 #define PLUGIN_NAME "WvW Killstreak"
-#define PLUGIN_VERSION "1.0.0"
+#define PLUGIN_VERSION "1.0.1"
 #define PLUGIN_SIG 0xB020F1 // Unique signature
 
-// Output file path (relative to GW2 directory)
+// Debug mode - set to 1 to enable logging
+#define DEBUG_MODE 1
+
+// Output file paths (relative to GW2 directory)
 static const char* OUTPUT_FILE = "addons/arcdps/killstreak.txt";
+static const char* DEBUG_FILE = "addons/arcdps/killstreak_debug.txt";
 
 // State
 static std::atomic<uint32_t> g_killCount{0};
 static std::atomic<bool> g_inWvW{false};
 static std::mutex g_fileMutex;
+static std::mutex g_debugMutex;
 static uintptr_t g_selfId = 0;
-static uint16_t g_selfInstId = 0;
 
 // ArcDPS exports
 static arcdps_exports g_exports;
 
 // Forward declarations
 static void write_killcount_to_file();
+static void debug_log(const char* fmt, ...);
 static uintptr_t mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillname, uint64_t id, uint64_t revision);
 static uintptr_t mod_wnd(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
+// Debug logging
+static void debug_log(const char* fmt, ...) {
+#if DEBUG_MODE
+    std::lock_guard<std::mutex> lock(g_debugMutex);
+
+    FILE* f = nullptr;
+    if (fopen_s(&f, DEBUG_FILE, "a") == 0 && f) {
+        // Timestamp
+        time_t now = time(nullptr);
+        struct tm timeinfo;
+        localtime_s(&timeinfo, &now);
+        fprintf(f, "[%02d:%02d:%02d] ", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(f, fmt, args);
+        va_end(args);
+
+        fprintf(f, "\n");
+        fclose(f);
+    }
+#endif
+}
 
 // Write the current kill count to file
 static void write_killcount_to_file() {
@@ -49,57 +80,37 @@ static uintptr_t mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillnam
     // Handle null event (agent tracking)
     if (!ev) {
         if (src && src->self) {
-            // Track self agent ID
             g_selfId = src->id;
-
-            // Check if we're in WvW based on team ID
-            if (is_wvw_team(src->team)) {
-                if (!g_inWvW.load()) {
-                    g_inWvW.store(true);
-                    // Reset kill count when entering WvW
-                    g_killCount.store(0);
-                    write_killcount_to_file();
-                }
-            }
+            debug_log("Self agent detected: id=%llu, name=%s, team=%u",
+                (unsigned long long)src->id, src->name ? src->name : "null", src->team);
         }
         return 0;
     }
 
-    // Only process in WvW
-    if (!g_inWvW.load()) {
-        return 0;
-    }
-
-    // Handle state changes
+    // Handle state changes first
     if (ev->is_statechange) {
         switch (ev->is_statechange) {
-            case CBTS_CHANGEDEAD:
-                // Check if WE died (src is the one who died)
+            case CBTS_ENTERCOMBAT:
                 if (src && src->self) {
-                    // Player died - reset killstreak
+                    debug_log("Entered combat - self, inWvW=%d", g_inWvW.load());
+                }
+                break;
+
+            case CBTS_CHANGEDEAD:
+                debug_log("CHANGEDEAD: src=%s (self=%d), dst=%s",
+                    src && src->name ? src->name : "null",
+                    src ? src->self : 0,
+                    dst && dst->name ? dst->name : "null");
+
+                // Check if WE died
+                if (src && src->self) {
+                    debug_log("Player died - resetting killstreak from %u", g_killCount.load());
                     g_killCount.store(0);
                     write_killcount_to_file();
                 }
                 break;
 
-            case CBTS_TEAMCHANGE:
-                // Track team changes to detect WvW entry/exit
-                if (src && src->self) {
-                    bool wasInWvW = g_inWvW.load();
-                    bool nowInWvW = is_wvw_team(src->team);
-                    g_inWvW.store(nowInWvW);
-
-                    if (!wasInWvW && nowInWvW) {
-                        // Just entered WvW - reset count
-                        g_killCount.store(0);
-                        write_killcount_to_file();
-                    }
-                }
-                break;
-
             case CBTS_MAPID:
-                // Map changed - check if it's a WvW map
-                // WvW map IDs are in ranges: 38, 94-96, 1099, 1143, 968, 1206, 1323
                 {
                     uint32_t mapId = static_cast<uint32_t>(ev->src_agent);
                     bool isWvWMap = (mapId == 38) ||                    // Eternal Battlegrounds
@@ -110,15 +121,16 @@ static uintptr_t mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillnam
                                    (mapId == 1206) ||                   // Alpine Borderlands
                                    (mapId == 1323);                     // Desert Borderlands variant
 
+                    debug_log("MAPID change: mapId=%u, isWvWMap=%d, wasInWvW=%d",
+                        mapId, isWvWMap, g_inWvW.load());
+
                     bool wasInWvW = g_inWvW.load();
                     g_inWvW.store(isWvWMap);
 
                     if (!wasInWvW && isWvWMap) {
+                        debug_log("Entered WvW - resetting kill count");
                         g_killCount.store(0);
                         write_killcount_to_file();
-                    } else if (wasInWvW && !isWvWMap) {
-                        // Left WvW - optionally keep the count or reset
-                        // Currently keeping the count
                     }
                 }
                 break;
@@ -126,27 +138,27 @@ static uintptr_t mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillnam
         return 0;
     }
 
-    // Handle killing blows
-    // result == CBTR_KILLINGBLOW means this hit killed the target
-    if (ev->result == CBTR_KILLINGBLOW) {
-        // Check if WE dealt the killing blow
-        if (src && src->self) {
-            // Make sure target is a foe (enemy player)
-            if (ev->iff == IFF_FOE && dst) {
-                // Increment kill count
-                g_killCount.fetch_add(1);
-                write_killcount_to_file();
-            }
-        }
+    // Skip if not in WvW
+    if (!g_inWvW.load()) {
+        return 0;
     }
 
-    // Alternative: Track when dst_agent dies and we were the source
-    // This catches kills from DoT effects etc
-    if (ev->is_statechange == CBTS_CHANGEDEAD && dst) {
-        // The destination agent died
-        if (src && src->self && ev->iff == IFF_FOE) {
-            // We killed an enemy - but only count if not already counted via KILLINGBLOW
-            // To avoid double counting, we only use KILLINGBLOW above
+    // Log combat events with killing blows
+    if (ev->result == CBTR_KILLINGBLOW) {
+        debug_log("KILLINGBLOW detected: src=%s (self=%d, id=%llu), dst=%s (id=%llu), iff=%d, skill=%s",
+            src && src->name ? src->name : "null",
+            src ? src->self : 0,
+            src ? (unsigned long long)src->id : 0,
+            dst && dst->name ? dst->name : "null",
+            dst ? (unsigned long long)dst->id : 0,
+            ev->iff,
+            skillname ? skillname : "null");
+
+        // Check if WE dealt the killing blow to a FOE
+        if (src && src->self && dst && ev->iff == IFF_FOE) {
+            uint32_t newCount = g_killCount.fetch_add(1) + 1;
+            debug_log("KILL COUNTED! New killstreak: %u", newCount);
+            write_killcount_to_file();
         }
     }
 
@@ -160,7 +172,7 @@ static uintptr_t mod_wnd(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
 // Module release
 static uintptr_t mod_release() {
-    // Final write
+    debug_log("Plugin unloading, final kill count: %u", g_killCount.load());
     write_killcount_to_file();
     return 0;
 }
@@ -177,9 +189,20 @@ static arcdps_exports* mod_init() {
     g_exports.combat = reinterpret_cast<void*>(mod_combat);
     g_exports.wnd_nofilter = reinterpret_cast<void*>(mod_wnd);
 
-    // Initialize file with 0
+    // Initialize
     g_killCount.store(0);
     write_killcount_to_file();
+
+    // Clear debug log and write init message
+#if DEBUG_MODE
+    {
+        FILE* f = nullptr;
+        if (fopen_s(&f, DEBUG_FILE, "w") == 0 && f) {
+            fclose(f);
+        }
+    }
+#endif
+    debug_log("Plugin initialized - version %s", PLUGIN_VERSION);
 
     return &g_exports;
 }
@@ -195,7 +218,6 @@ extern "C" __declspec(dllexport) void* get_init_addr(
     void* freefn,
     uint32_t d3dversion
 ) {
-    // Could store arc functions here if needed
     return reinterpret_cast<void*>(mod_init);
 }
 
