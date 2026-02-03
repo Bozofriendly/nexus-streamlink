@@ -109,16 +109,26 @@ static uintptr_t mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillnam
                 break;
 
             case CBTS_CHANGEDEAD:
-                debug_log("CHANGEDEAD: src=%s (self=%d), dst=%s",
+                debug_log("CHANGEDEAD: src=%s (self=%d, prof=%u, elite=%u, team=%u)",
                     src && src->name ? src->name : "null",
                     src ? src->self : 0,
-                    dst && dst->name ? dst->name : "null");
+                    src ? src->prof : 0,
+                    src ? src->elite : 0,
+                    src ? src->team : 0);
 
                 // Check if WE died
                 if (src && src->self) {
                     debug_log("Player died - resetting killstreak from %u", g_killCount.load());
                     g_killCount.store(0);
                     write_killcount_to_file();
+                }
+                // Check if an enemy player died (prof > 0 means it's a player, not NPC)
+                // In WvW, enemy team IDs differ from ours
+                else if (src && src->prof > 0 && src->prof <= 9 && g_inWvW.load()) {
+                    debug_log("Enemy player died: %s (team=%u, our_id=%llu)",
+                        src->name ? src->name : "unknown",
+                        src->team,
+                        (unsigned long long)g_selfId);
                 }
                 break;
 
@@ -163,8 +173,18 @@ static uintptr_t mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillnam
         // Check if WE dealt the killing blow to a FOE
         if (src && src->self && dst && ev->iff == IFF_FOE) {
             uint32_t newCount = g_killCount.fetch_add(1) + 1;
-            debug_log("KILL COUNTED! New killstreak: %u", newCount);
+            debug_log("KILL COUNTED via KILLINGBLOW! New killstreak: %u", newCount);
             write_killcount_to_file();
+        }
+    }
+
+    // Also log physical hits to foes (to see if we're hitting enemies at all)
+    if (ev->result <= CBTR_BLIND && src && src->self && ev->iff == IFF_FOE) {
+        // Only log occasionally to avoid spam - log when dealing significant damage
+        if (ev->value > 1000 || ev->buff_dmg > 1000) {
+            debug_log("HIT on foe: dst=%s, dmg=%d, buff_dmg=%d, result=%d",
+                dst && dst->name ? dst->name : "null",
+                ev->value, ev->buff_dmg, ev->result);
         }
     }
 
