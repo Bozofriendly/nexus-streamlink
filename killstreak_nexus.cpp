@@ -35,7 +35,8 @@ namespace ImGui {
 
 // Plugin info
 #define ADDON_NAME "WvW Killstreak"
-#define ADDON_SIGNATURE -0xB020F1  // Negative for non-Raidcore hosted addons
+// Negative signature for non-Raidcore hosted addons (cast to uint32_t)
+#define ADDON_SIGNATURE static_cast<uint32_t>(-0xB020F1)
 
 // Debug mode
 #define DEBUG_MODE 1
@@ -73,6 +74,7 @@ static std::string GetFullOutputPath();
 ///----------------------------------------------------------------------------------------------------
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
+    (void)lpReserved;  // Unused parameter
     switch (ul_reason_for_call)
     {
         case DLL_PROCESS_ATTACH:
@@ -438,7 +440,9 @@ static void AddonUnload()
         // Deregister render callback
         g_api->Renderer.Deregister(RenderOptions);
 
-        g_api->Log(ELogLevel_INFO, ADDON_NAME, "Addon unloaded. Final killstreak: %u", g_killCount.load());
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Addon unloaded. Final killstreak: %u", g_killCount.load());
+        g_api->Log(ELogLevel_INFO, ADDON_NAME, msg);
     }
 
     // Final file write
