@@ -315,18 +315,37 @@ static void OnCombatEvent(void* eventArgs)
         return;
     }
 
-    // Check for killing blow
-    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
+    // Log all combat events with damage to help debug
+    if (!ev->IsStatechange && !ev->IsActivation && !ev->IsBuffRemove && ev->Value != 0)
     {
-        DebugLog("KILLINGBLOW: src=%s (self=%d), dst=%s, iff=%d, inWvW=%d",
+        DebugLog("COMBAT: result=%u, src=%s (self=%d, id=%llu), dst=%s, value=%d, iff=%d",
+            ev->Result,
             src && src->Name ? src->Name : "null",
             src ? src->IsSelf : 0,
+            src ? (unsigned long long)src->ID : 0,
+            dst && dst->Name ? dst->Name : "null",
+            ev->Value,
+            ev->IFF);
+    }
+
+    // Check for killing blow or downed - log all for debugging
+    // KILLINGBLOW = 8, DOWNED = 9 in ArcDPS API
+    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW || ev->Result == ArcDPS::CBTR_DOWNED)
+    {
+        DebugLog("KILLINGBLOW DETECTED: result=%u, src=%s (self=%d, id=%llu), dst=%s, iff=%d, inWvW=%d, selfId=%llu",
+            ev->Result,
+            src && src->Name ? src->Name : "null",
+            src ? src->IsSelf : 0,
+            src ? (unsigned long long)src->ID : 0,
             dst && dst->Name ? dst->Name : "null",
             ev->IFF,
-            g_inWvW.load());
+            g_inWvW.load(),
+            (unsigned long long)g_selfId);
 
-        // Check if WE dealt the killing blow
-        if (src && src->IsSelf)
+        // Check if WE dealt the killing blow (check both IsSelf flag and ID match)
+        bool isSelfKill = (src && src->IsSelf) || (src && g_selfId != 0 && src->ID == g_selfId);
+
+        if (isSelfKill)
         {
             uint32_t newCount = g_killCount.fetch_add(1) + 1;
             DebugLog("KILL COUNTED! New killstreak: %u", newCount);
@@ -339,6 +358,10 @@ static void OnCombatEvent(void* eventArgs)
                 snprintf(alertMsg, sizeof(alertMsg), "Killstreak: %u!", newCount);
                 g_api->GUI_SendAlert(alertMsg);
             }
+        }
+        else
+        {
+            DebugLog("KILLINGBLOW not counted - src is not self");
         }
     }
 }
