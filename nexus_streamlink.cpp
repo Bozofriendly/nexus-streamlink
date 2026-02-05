@@ -83,7 +83,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
     g_addonDef.Version.Minor = 0;
-    g_addonDef.Version.Build = 1;
+    g_addonDef.Version.Build = 2;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -338,10 +338,10 @@ static void OnCombatEvent(void* eventArgs)
         }
     }
 
-    // Check for killing blow or downed
+    // Check for killing blow only (not downed - that would double-count)
     // KILLINGBLOW = 8: target was killed by skill
-    // DOWNED = 9: target was downed by skill
-    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW || ev->Result == ArcDPS::CBTR_DOWNED)
+    // DOWNED = 9: target was downed by skill (logged but not counted)
+    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
     {
         DebugLog("*** KILL/DOWN EVENT ***: result=%u (%s), src=%s (self=%d, id=%llu, team=%u), dst=%s (team=%u), iff=%d, selfId=%llu",
             ev->Result,
