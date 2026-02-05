@@ -1,4 +1,4 @@
-name: Build WvW Killstreak Addon
+name: Build Nexus Streamlink Addon
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-nexus:
+  build:
     runs-on: windows-latest
     name: Build Nexus Addon
 
@@ -21,8 +21,8 @@ jobs:
       - name: Setup MSVC
         uses: microsoft/setup-msbuild@v2
 
-      - name: Configure CMake (Nexus)
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TYPE=NEXUS
+      - name: Configure CMake
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
 
       - name: Build
         run: cmake --build build --config Release
@@ -33,55 +33,24 @@ jobs:
           name: nexus_streamlink
           path: build/Release/nexus_streamlink.dll
 
-  build-arcdps:
-    runs-on: windows-latest
-    name: Build ArcDPS Addon
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Configure CMake (ArcDPS)
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TYPE=ARCDPS
-
-      - name: Build
-        run: cmake --build build --config Release
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: arcdps_killstreak
-          path: build/Release/arcdps_killstreak.dll
-
   release:
-    needs: [build-nexus, build-arcdps]
+    needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
 
     steps:
-      - name: Download Nexus artifact
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: nexus_streamlink
           path: nexus
 
-      - name: Download ArcDPS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: arcdps_killstreak
-          path: arcdps
-
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            nexus/nexus_streamlink.dll
-            arcdps/arcdps_killstreak.dll
+          files: nexus/nexus_streamlink.dll
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
