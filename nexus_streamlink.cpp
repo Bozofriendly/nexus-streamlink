@@ -101,7 +101,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.Unload = AddonUnload;
     g_addonDef.Flags = EAddonFlags_None;
     g_addonDef.Provider = EUpdateProvider_GitHub;
-    g_addonDef.UpdateLink = "https://github.com/Bozofriendly/arcDPS-killstreak";
+    g_addonDef.UpdateLink = "https://github.com/Bozofriendly/nexus-streamlink";
 
     return &g_addonDef;
 }
