@@ -14,7 +14,6 @@
 #include <atomic>
 #include <mutex>
 #include <string>
-
 #include <unordered_set>
 
 #include "Nexus.h"
@@ -92,8 +91,8 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.APIVersion = NEXUS_API_VERSION;
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
-    g_addonDef.Version.Minor = 2;
-    g_addonDef.Version.Build = 4;
+    g_addonDef.Version.Minor = 3;
+    g_addonDef.Version.Build = 0;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -274,17 +273,12 @@ static void WriteSquadStatusToFile()
 
 ///----------------------------------------------------------------------------------------------------
 /// OnSquadUpdate - Handle Unofficial Extras squad update events via Nexus
-/// Requires: ArcDPS, Unofficial Extras, and GW2-ArcdpsIntegration addons
 ///----------------------------------------------------------------------------------------------------
 static void OnSquadUpdate(void* eventArgs)
 {
-    DebugLog("OnSquadUpdate called, eventArgs=%p", eventArgs);
-
     if (!eventArgs) return;
 
     EvSquadUpdate* data = static_cast<EvSquadUpdate*>(eventArgs);
-    DebugLog("SquadUpdate: UpdatedUsers=%p, Count=%llu",
-        (void*)data->UpdatedUsers, (unsigned long long)data->UpdatedUsersCount);
     if (!data->UpdatedUsers || data->UpdatedUsersCount == 0) return;
 
     std::lock_guard<std::mutex> lock(g_squadMutex);
@@ -299,14 +293,11 @@ static void OnSquadUpdate(void* eventArgs)
         if (user.Role != UnofficialExtras::UserRole::None &&
             user.Role != UnofficialExtras::UserRole::Invalid)
         {
-            // User joined or is in squad
             g_squadMembers.insert(accountName);
-            DebugLog("Squad member added: %s (role=%u, subgroup=%u)",
-                accountName.c_str(), static_cast<uint8_t>(user.Role), user.Subgroup);
+            DebugLog("Squad member added: %s (role=%u)", accountName.c_str(), static_cast<uint8_t>(user.Role));
         }
         else
         {
-            // User left squad
             g_squadMembers.erase(accountName);
             DebugLog("Squad member removed: %s", accountName.c_str());
         }
@@ -318,8 +309,7 @@ static void OnSquadUpdate(void* eventArgs)
     if (wasInSquad != nowInSquad)
     {
         g_inSquad.store(nowInSquad);
-        DebugLog("Squad status changed: %s (members: %zu)",
-            nowInSquad ? "IN SQUAD" : "NOT IN SQUAD", g_squadMembers.size());
+        DebugLog("Squad status changed: %s", nowInSquad ? "IN SQUAD" : "NOT IN SQUAD");
         WriteSquadStatusToFile();
     }
 }
@@ -358,16 +348,6 @@ static void OnCombatEvent(void* eventArgs)
     // Handle state changes
     if (ev->IsStatechange)
     {
-        // Log all state changes involving self for debugging
-        if (src && src->IsSelf)
-        {
-            DebugLog("STATE CHANGE: type=%u, src=%s (self=%d, team=%u)",
-                ev->IsStatechange,
-                src->Name ? src->Name : "null",
-                src->IsSelf,
-                src->Team);
-        }
-
         switch (ev->IsStatechange)
         {
             case ArcDPS::CBTS_ENTERCOMBAT:
@@ -382,16 +362,8 @@ static void OnCombatEvent(void* eventArgs)
                 }
                 break;
 
-            case ArcDPS::CBTS_CHANGEDOWN:
-                DebugLog("CHANGEDOWN (downed): src=%s (self=%d, team=%u)",
-                    src && src->Name ? src->Name : "null",
-                    src ? src->IsSelf : 0,
-                    src ? src->Team : 0);
-                // Don't reset on downed - user wants only full death
-                break;
-
             case ArcDPS::CBTS_CHANGEDEAD:
-                DebugLog("CHANGEDEAD (dead): src=%s (self=%d, prof=%u, team=%u)",
+                DebugLog("CHANGEDEAD: src=%s (self=%d, prof=%u, team=%u)",
                     src && src->Name ? src->Name : "null",
                     src ? src->IsSelf : 0,
                     src ? src->Profession : 0,
@@ -400,7 +372,7 @@ static void OnCombatEvent(void* eventArgs)
                 // Check if WE died
                 if (src && src->IsSelf)
                 {
-                    DebugLog("*** PLAYER FULLY DEAD *** Resetting killstreak from %u", g_killCount.load());
+                    DebugLog("Player died - resetting killstreak from %u", g_killCount.load());
                     g_killCount.store(0);
                     WriteKillcountToFile();
                 }
@@ -458,12 +430,12 @@ static void OnCombatEvent(void* eventArgs)
         }
     }
 
-    // KILLINGBLOW = 8: target was killed by skill (fully dead)
-    // DOWNED = 9: target was downed by skill (just downed, not dead)
-    // We only act on KILLINGBLOW for both kill counting and death detection
+    // Check for killing blow only (not downed - that would double-count)
+    // KILLINGBLOW = 8: target was killed by skill
+    // DOWNED = 9: target was downed by skill (logged but not counted)
     if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
     {
-        DebugLog("*** KILL/DOWN EVENT ***: result=%u (%s), src=%s (self=%d, id=%llu, team=%u), dst=%s (self=%d, id=%llu, team=%u), iff=%d, selfId=%llu",
+        DebugLog("*** KILL/DOWN EVENT ***: result=%u (%s), src=%s (self=%d, id=%llu, team=%u), dst=%s (team=%u), iff=%d, selfId=%llu",
             ev->Result,
             ev->Result == ArcDPS::CBTR_KILLINGBLOW ? "KILLINGBLOW" : "DOWNED",
             src && src->Name ? src->Name : "null",
@@ -471,8 +443,6 @@ static void OnCombatEvent(void* eventArgs)
             src ? (unsigned long long)src->ID : 0,
             src ? src->Team : 0,
             dst && dst->Name ? dst->Name : "null",
-            dst ? dst->IsSelf : 0,
-            dst ? (unsigned long long)dst->ID : 0,
             dst ? dst->Team : 0,
             ev->IFF,
             (unsigned long long)g_selfId);
@@ -517,25 +487,8 @@ static void OnCombatEvent(void* eventArgs)
                 src ? src->IsSelf : 0);
         }
 
-        // Check if WE were killed (we are the target of KILLINGBLOW)
-        // Method 1: IsSelf flag is set on dst
-        // Method 2: dst ID matches our stored self ID
-        bool isSelfDeath = false;
-        if (dst)
-        {
-            if (dst->IsSelf)
-            {
-                isSelfDeath = true;
-                DebugLog("Death detection: dst->IsSelf flag is set");
-            }
-            else if (g_selfId != 0 && dst->ID == g_selfId)
-            {
-                isSelfDeath = true;
-                DebugLog("Death detection: dst->ID matches selfId");
-            }
-        }
-
-        if (isSelfDeath)
+        // Check if WE were killed (we are the target)
+        if (dst && dst->IsSelf)
         {
             DebugLog("*** PLAYER DIED! *** Resetting killstreak from %u", g_killCount.load());
             g_killCount.store(0);
@@ -564,7 +517,6 @@ static void AddonLoad(AddonAPI* aAPI)
 
     // Subscribe to Unofficial Extras squad events (requires ArcdpsIntegration addon)
     aAPI->Events_Subscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
-    DebugLog("Subscribed to squad update event: %s", EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE);
 
     // Initialize output files
     g_killCount.store(0);
