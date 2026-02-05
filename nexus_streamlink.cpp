@@ -93,7 +93,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
     g_addonDef.Version.Minor = 1;
-    g_addonDef.Version.Build = 0;
+    g_addonDef.Version.Build = 1;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -278,9 +278,13 @@ static void WriteSquadStatusToFile()
 ///----------------------------------------------------------------------------------------------------
 static void OnSquadUpdate(void* eventArgs)
 {
+    DebugLog("OnSquadUpdate called, eventArgs=%p", eventArgs);
+
     if (!eventArgs) return;
 
     EvSquadUpdate* data = static_cast<EvSquadUpdate*>(eventArgs);
+    DebugLog("SquadUpdate: UpdatedUsers=%p, Count=%llu",
+        (void*)data->UpdatedUsers, (unsigned long long)data->UpdatedUsersCount);
     if (!data->UpdatedUsers || data->UpdatedUsersCount == 0) return;
 
     std::lock_guard<std::mutex> lock(g_squadMutex);
@@ -523,6 +527,7 @@ static void AddonLoad(AddonAPI* aAPI)
 
     // Subscribe to Unofficial Extras squad events (requires ArcdpsIntegration addon)
     aAPI->Events_Subscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
+    DebugLog("Subscribed to squad update event: %s", EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE);
 
     // Initialize output files
     g_killCount.store(0);
