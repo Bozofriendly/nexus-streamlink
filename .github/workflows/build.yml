@@ -33,6 +33,33 @@ jobs:
           name: nexus_streamlink
           path: build/Release/nexus_streamlink.dll
 
+  # Always update "latest" release on push to master
+  latest:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus_streamlink
+          path: nexus
+
+      - name: Update latest release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: "Automatic build from latest commit. For stable releases, see versioned tags."
+          prerelease: true
+          files: nexus/nexus_streamlink.dll
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Create versioned release on tags
   release:
     needs: build
     runs-on: ubuntu-latest
