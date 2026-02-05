@@ -417,8 +417,8 @@ static void OnCombatEvent(void* eventArgs)
     // KILLINGBLOW = 8, DOWNED = 9 - these have Value == 0 per ArcDPS docs
     if (!ev->IsStatechange)
     {
-        // Log events with high result values (8+) or damage events from self
-        if (ev->Result >= 8 || (src && src->IsSelf && ev->Value != 0))
+        // Log events with high result values (8+), damage from self, OR damage TO self
+        if (ev->Result >= 8 || (src && src->IsSelf && ev->Value != 0) || (dst && dst->IsSelf))
         {
             DebugLog("EVENT: result=%u, buff=%u, activ=%u, buffrem=%u, src=%s (self=%d, id=%llu), dst=%s (self=%d), value=%d, iff=%d, skill=%u",
                 ev->Result,
