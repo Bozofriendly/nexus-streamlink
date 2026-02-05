@@ -92,7 +92,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
     g_addonDef.Version.Minor = 3;
-    g_addonDef.Version.Build = 1;
+    g_addonDef.Version.Build = 2;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -518,8 +518,9 @@ static void AddonLoad(AddonAPI* aAPI)
     // Load settings
     LoadSettings();
 
-    // Subscribe to ArcDPS combat events
+    // Subscribe to ArcDPS combat events (both local and squad for full coverage)
     aAPI->Events_Subscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
+    aAPI->Events_Subscribe(EV_ARCDPS_COMBATEVENT_SQUAD_RAW, OnCombatEvent);
 
     // Subscribe to Unofficial Extras squad events (requires ArcdpsIntegration addon)
     aAPI->Events_Subscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
@@ -544,6 +545,7 @@ static void AddonUnload()
     {
         // Unsubscribe from events
         g_api->Events_Unsubscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
+        g_api->Events_Unsubscribe(EV_ARCDPS_COMBATEVENT_SQUAD_RAW, OnCombatEvent);
         g_api->Events_Unsubscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
 
         char msg[64];
