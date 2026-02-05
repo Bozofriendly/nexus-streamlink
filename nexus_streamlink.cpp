@@ -93,7 +93,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
     g_addonDef.Version.Minor = 2;
-    g_addonDef.Version.Build = 2;
+    g_addonDef.Version.Build = 3;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -440,11 +440,10 @@ static void OnCombatEvent(void* eventArgs)
         }
     }
 
-    // KILLINGBLOW = 8: target was killed by skill
-    // DOWNED = 9: target was downed by skill
-    // We count kills on KILLINGBLOW only (to avoid double-counting with DOWNED)
-    // But we detect OUR death on either KILLINGBLOW or DOWNED (downed = lost the fight)
-    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW || ev->Result == ArcDPS::CBTR_DOWNED)
+    // KILLINGBLOW = 8: target was killed by skill (fully dead)
+    // DOWNED = 9: target was downed by skill (just downed, not dead)
+    // We only act on KILLINGBLOW for both kill counting and death detection
+    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
     {
         DebugLog("*** KILL/DOWN EVENT ***: result=%u (%s), src=%s (self=%d, id=%llu, team=%u), dst=%s (self=%d, id=%llu, team=%u), iff=%d, selfId=%llu",
             ev->Result,
@@ -478,8 +477,7 @@ static void OnCombatEvent(void* eventArgs)
             }
         }
 
-        // Only count kills on KILLINGBLOW (not DOWNED) to avoid double-counting
-        if (isSelfKill && ev->Result == ArcDPS::CBTR_KILLINGBLOW)
+        if (isSelfKill)
         {
             uint32_t newCount = g_killCount.fetch_add(1) + 1;
             DebugLog("*** KILL COUNTED! *** New killstreak: %u", newCount);
@@ -493,7 +491,7 @@ static void OnCombatEvent(void* eventArgs)
                 g_api->GUI_SendAlert(alertMsg);
             }
         }
-        else if (!isSelfKill && ev->Result == ArcDPS::CBTR_KILLINGBLOW)
+        else
         {
             DebugLog("Kill not counted - src (id=%llu) is not self (selfId=%llu, IsSelf=%d)",
                 src ? (unsigned long long)src->ID : 0,
@@ -501,8 +499,7 @@ static void OnCombatEvent(void* eventArgs)
                 src ? src->IsSelf : 0);
         }
 
-        // Check if WE were killed/downed (we are the target)
-        // Reset killstreak on DOWNED or KILLINGBLOW targeting us
+        // Check if WE were killed (we are the target of KILLINGBLOW)
         // Method 1: IsSelf flag is set on dst
         // Method 2: dst ID matches our stored self ID
         bool isSelfDeath = false;
