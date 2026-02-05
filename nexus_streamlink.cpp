@@ -93,7 +93,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
     g_addonDef.Version.Minor = 2;
-    g_addonDef.Version.Build = 3;
+    g_addonDef.Version.Build = 4;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -358,6 +358,16 @@ static void OnCombatEvent(void* eventArgs)
     // Handle state changes
     if (ev->IsStatechange)
     {
+        // Log all state changes involving self for debugging
+        if (src && src->IsSelf)
+        {
+            DebugLog("STATE CHANGE: type=%u, src=%s (self=%d, team=%u)",
+                ev->IsStatechange,
+                src->Name ? src->Name : "null",
+                src->IsSelf,
+                src->Team);
+        }
+
         switch (ev->IsStatechange)
         {
             case ArcDPS::CBTS_ENTERCOMBAT:
@@ -372,8 +382,16 @@ static void OnCombatEvent(void* eventArgs)
                 }
                 break;
 
+            case ArcDPS::CBTS_CHANGEDOWN:
+                DebugLog("CHANGEDOWN (downed): src=%s (self=%d, team=%u)",
+                    src && src->Name ? src->Name : "null",
+                    src ? src->IsSelf : 0,
+                    src ? src->Team : 0);
+                // Don't reset on downed - user wants only full death
+                break;
+
             case ArcDPS::CBTS_CHANGEDEAD:
-                DebugLog("CHANGEDEAD: src=%s (self=%d, prof=%u, team=%u)",
+                DebugLog("CHANGEDEAD (dead): src=%s (self=%d, prof=%u, team=%u)",
                     src && src->Name ? src->Name : "null",
                     src ? src->IsSelf : 0,
                     src ? src->Profession : 0,
@@ -382,7 +400,7 @@ static void OnCombatEvent(void* eventArgs)
                 // Check if WE died
                 if (src && src->IsSelf)
                 {
-                    DebugLog("Player died - resetting killstreak from %u", g_killCount.load());
+                    DebugLog("*** PLAYER FULLY DEAD *** Resetting killstreak from %u", g_killCount.load());
                     g_killCount.store(0);
                     WriteKillcountToFile();
                 }
