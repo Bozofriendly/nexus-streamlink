@@ -28,16 +28,11 @@
 // Negative signature for non-Raidcore hosted addons (cast to uint32_t)
 #define ADDON_SIGNATURE static_cast<uint32_t>(-0xB020F1)
 
-// Debug mode
-#define DEBUG_MODE 1
-
 // State
 static std::atomic<uint32_t> g_killCount{0};
 static std::atomic<bool> g_inWvW{false};
 static std::atomic<bool> g_inSquad{false};
-static std::atomic<bool> g_isPlayerDowned{false};
 static std::mutex g_fileMutex;
-static std::mutex g_debugMutex;
 static std::mutex g_squadMutex;
 static uintptr_t g_selfId = 0;
 static std::unordered_set<std::string> g_squadMembers;
@@ -59,9 +54,7 @@ static void OnCombatEvent(void* eventArgs);
 static void OnSquadUpdate(void* eventArgs);
 static void WriteKillcountToFile();
 static void WriteSquadStatusToFile();
-static void DebugLog(const char* fmt, ...);
 static void LoadSettings();
-static void SaveSettings();
 static std::string GetFullOutputPath();
 static std::string GetSquadOutputPath();
 
@@ -92,8 +85,8 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.APIVersion = NEXUS_API_VERSION;
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
-    g_addonDef.Version.Minor = 3;
-    g_addonDef.Version.Build = 2;
+    g_addonDef.Version.Minor = 4;
+    g_addonDef.Version.Build = 0;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -187,47 +180,7 @@ static void LoadSettings()
             strncpy_s(g_outputPath, buffer, sizeof(g_outputPath) - 1);
         }
         fclose(f);
-        DebugLog("Settings loaded: outputPath=%s", g_outputPath);
     }
-}
-
-///----------------------------------------------------------------------------------------------------
-/// SaveSettings - Save settings to file
-///----------------------------------------------------------------------------------------------------
-static void SaveSettings()
-{
-    std::string path = GetSettingsPath();
-    if (path.empty()) return;
-
-    // Ensure directory exists
-    std::string dirPath = path.substr(0, path.find_last_of("\\/"));
-    CreateDirectoryA(dirPath.c_str(), nullptr);
-
-    FILE* f = nullptr;
-    if (fopen_s(&f, path.c_str(), "w") == 0 && f)
-    {
-        fprintf(f, "%s\n", g_outputPath);
-        fclose(f);
-        DebugLog("Settings saved: outputPath=%s", g_outputPath);
-    }
-}
-
-///----------------------------------------------------------------------------------------------------
-/// DebugLog - Write debug messages
-///----------------------------------------------------------------------------------------------------
-static void DebugLog(const char* fmt, ...)
-{
-#if DEBUG_MODE
-    if (!g_api) return;
-
-    char buffer[1024];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buffer, sizeof(buffer), fmt, args);
-    va_end(args);
-
-    g_api->Log(ELogLevel_DEBUG, ADDON_NAME, buffer);
-#endif
 }
 
 ///----------------------------------------------------------------------------------------------------
@@ -295,12 +248,10 @@ static void OnSquadUpdate(void* eventArgs)
             user.Role != UnofficialExtras::UserRole::Invalid)
         {
             g_squadMembers.insert(accountName);
-            DebugLog("Squad member added: %s (role=%u)", accountName.c_str(), static_cast<uint8_t>(user.Role));
         }
         else
         {
             g_squadMembers.erase(accountName);
-            DebugLog("Squad member removed: %s", accountName.c_str());
         }
     }
 
@@ -310,7 +261,6 @@ static void OnSquadUpdate(void* eventArgs)
     if (wasInSquad != nowInSquad)
     {
         g_inSquad.store(nowInSquad);
-        DebugLog("Squad status changed: %s", nowInSquad ? "IN SQUAD" : "NOT IN SQUAD");
         WriteSquadStatusToFile();
     }
 }
@@ -333,13 +283,10 @@ static void OnCombatEvent(void* eventArgs)
         if (src && src->IsSelf)
         {
             g_selfId = src->ID;
-            DebugLog("Self agent detected: id=%llu, name=%s, team=%u",
-                (unsigned long long)src->ID, src->Name ? src->Name : "null", src->Team);
 
             // Detect WvW from team ID (teams 9+ are WvW teams)
             if (src->Team >= 9 && !g_inWvW.load())
             {
-                DebugLog("WvW detected from team ID %u - enabling WvW mode", src->Team);
                 g_inWvW.store(true);
             }
         }
@@ -349,105 +296,24 @@ static void OnCombatEvent(void* eventArgs)
     // Handle state changes
     if (ev->IsStatechange)
     {
-        // Log ALL state changes for debugging
-        DebugLog("STATECHANGE: type=%u, src=%s (self=%d)",
-            ev->IsStatechange,
-            src && src->Name ? src->Name : "null",
-            src ? src->IsSelf : 0);
-
         switch (ev->IsStatechange)
         {
             case ArcDPS::CBTS_ENTERCOMBAT:
                 if (src && src->IsSelf)
                 {
-                    DebugLog("Entered combat - self, inWvW=%d, team=%u", g_inWvW.load(), src->Team);
                     if (src->Team >= 9 && !g_inWvW.load())
                     {
-                        DebugLog("WvW detected from combat team ID %u", src->Team);
                         g_inWvW.store(true);
                     }
                 }
                 break;
 
             case ArcDPS::CBTS_CHANGEDEAD:
-                DebugLog("CHANGEDEAD: src=%s (self=%d, prof=%u, team=%u)",
-                    src && src->Name ? src->Name : "null",
-                    src ? src->IsSelf : 0,
-                    src ? src->Profession : 0,
-                    src ? src->Team : 0);
-
-                // Check if WE died (direct death or bleedout - fires CHANGEDEAD)
+                // Check if WE died
                 if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
                 {
-                    DebugLog("Player died (CHANGEDEAD) - resetting killstreak from %u", g_killCount.load());
                     g_killCount.store(0);
                     WriteKillcountToFile();
-                    g_isPlayerDowned.store(false);  // Clear downed state
-                }
-                break;
-
-            case ArcDPS::CBTS_CHANGEDOWN:
-                DebugLog("CHANGEDOWN: src=%s (self=%d, id=%llu), dst=%s (self=%d, id=%llu)",
-                    src && src->Name ? src->Name : "null",
-                    src ? src->IsSelf : 0,
-                    src ? (unsigned long long)src->ID : 0,
-                    dst && dst->Name ? dst->Name : "null",
-                    dst ? dst->IsSelf : 0,
-                    dst ? (unsigned long long)dst->ID : 0);
-
-                // Track when WE get downed
-                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
-                {
-                    DebugLog("*** PLAYER DOWNED *** - tracking downed state");
-                    g_isPlayerDowned.store(true);
-                }
-                break;
-
-            case ArcDPS::CBTS_CHANGEUP:
-                DebugLog("CHANGEUP: src=%s (self=%d, id=%llu), dst=%s (self=%d, id=%llu)",
-                    src && src->Name ? src->Name : "null",
-                    src ? src->IsSelf : 0,
-                    src ? (unsigned long long)src->ID : 0,
-                    dst && dst->Name ? dst->Name : "null",
-                    dst ? dst->IsSelf : 0,
-                    dst ? (unsigned long long)dst->ID : 0);
-
-                // Track when WE rally (get up from downed without dying)
-                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
-                {
-                    DebugLog("*** PLAYER RALLIED *** - clearing downed state (NOT resetting killstreak)");
-                    g_isPlayerDowned.store(false);
-                }
-                break;
-
-            case ArcDPS::CBTS_DESPAWN:
-                DebugLog("DESPAWN: src=%s (self=%d, id=%llu)",
-                    src && src->Name ? src->Name : "null",
-                    src ? src->IsSelf : 0,
-                    src ? (unsigned long long)src->ID : 0);
-
-                // If we despawn while downed, it means we died (stomp/bleedout)
-                // This catches stomp deaths that don't fire CHANGEDEAD
-                if (g_isPlayerDowned.load() && src &&
-                    (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
-                {
-                    DebugLog("*** STOMP/BLEEDOUT DEATH DETECTED *** - resetting killstreak from %u", g_killCount.load());
-                    g_killCount.store(0);
-                    WriteKillcountToFile();
-                    g_isPlayerDowned.store(false);
-                }
-                break;
-
-            case ArcDPS::CBTS_SPAWN:
-                DebugLog("SPAWN: src=%s (self=%d, id=%llu)",
-                    src && src->Name ? src->Name : "null",
-                    src ? src->IsSelf : 0,
-                    src ? (unsigned long long)src->ID : 0);
-
-                // Clear downed state on spawn (respawn after death)
-                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
-                {
-                    g_isPlayerDowned.store(false);
                 }
                 break;
 
@@ -462,104 +328,40 @@ static void OnCombatEvent(void* eventArgs)
                                    (mapId == 1206) ||                   // Alpine Borderlands
                                    (mapId == 1323);                     // Desert Borderlands variant
 
-                    DebugLog("MAPID change: mapId=%u, isWvWMap=%d, wasInWvW=%d",
-                        mapId, isWvWMap, g_inWvW.load());
-
                     bool wasInWvW = g_inWvW.load();
                     g_inWvW.store(isWvWMap);
 
                     if (!wasInWvW && isWvWMap)
                     {
-                        DebugLog("Entered WvW - resetting kill count");
                         g_killCount.store(0);
                         WriteKillcountToFile();
                     }
-
-                    // Reset downed state on map change
-                    g_isPlayerDowned.store(false);
                 }
                 break;
         }
         return;
     }
 
-    // Log ALL events when player is downed (to capture stomp sequence)
-    // Also log events with high result values (8+), damage from self, OR damage TO self
-    if (!ev->IsStatechange)
-    {
-        bool shouldLog = ev->Result >= 8 ||
-                         (src && src->IsSelf && ev->Value != 0) ||
-                         (dst && dst->IsSelf) ||
-                         g_isPlayerDowned.load();  // Log everything while downed
-
-        if (shouldLog)
-        {
-            DebugLog("EVENT: result=%u, buff=%u, activ=%u, buffrem=%u, src=%s (self=%d, id=%llu), dst=%s (self=%d, id=%llu), value=%d, iff=%d, skill=%u",
-                ev->Result,
-                ev->Buff,
-                ev->IsActivation,
-                ev->IsBuffRemove,
-                src && src->Name ? src->Name : "null",
-                src ? src->IsSelf : 0,
-                src ? (unsigned long long)src->ID : 0,
-                dst && dst->Name ? dst->Name : "null",
-                dst ? dst->IsSelf : 0,
-                dst ? (unsigned long long)dst->ID : 0,
-                ev->Value,
-                ev->IFF,
-                ev->SkillID);
-        }
-
-        // Track downed state using DOWNED result (result=9)
-        if (ev->Result == ArcDPS::CBTR_DOWNED && dst &&
-            (dst->IsSelf || (g_selfId != 0 && dst->ID == g_selfId)))
-        {
-            DebugLog("*** PLAYER DOWNED (via result=9) *** - tracking downed state");
-            g_isPlayerDowned.store(true);
-        }
-    }
-
-    // Check for killing blow only (not downed - that would double-count)
-    // KILLINGBLOW = 8: target was killed by skill
-    // DOWNED = 9: target was downed by skill (logged but not counted)
+    // Check for killing blow
     if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
     {
-        DebugLog("*** KILL/DOWN EVENT ***: result=%u (%s), src=%s (self=%d, id=%llu, team=%u), dst=%s (self=%d, id=%llu, team=%u), iff=%d, selfId=%llu",
-            ev->Result,
-            ev->Result == ArcDPS::CBTR_KILLINGBLOW ? "KILLINGBLOW" : "DOWNED",
-            src && src->Name ? src->Name : "null",
-            src ? src->IsSelf : 0,
-            src ? (unsigned long long)src->ID : 0,
-            src ? src->Team : 0,
-            dst && dst->Name ? dst->Name : "null",
-            dst ? dst->IsSelf : 0,
-            dst ? (unsigned long long)dst->ID : 0,
-            dst ? dst->Team : 0,
-            ev->IFF,
-            (unsigned long long)g_selfId);
-
         // Check if WE dealt the killing blow
-        // Method 1: IsSelf flag is set
-        // Method 2: ID matches our stored self ID
         bool isSelfKill = false;
         if (src)
         {
             if (src->IsSelf)
             {
                 isSelfKill = true;
-                DebugLog("Kill attribution: IsSelf flag is set");
             }
             else if (g_selfId != 0 && src->ID == g_selfId)
             {
                 isSelfKill = true;
-                DebugLog("Kill attribution: ID matches selfId");
             }
         }
 
         if (isSelfKill)
         {
             uint32_t newCount = g_killCount.fetch_add(1) + 1;
-            DebugLog("*** KILL COUNTED! *** New killstreak: %u", newCount);
             WriteKillcountToFile();
 
             // Send alert for milestones
@@ -570,45 +372,29 @@ static void OnCombatEvent(void* eventArgs)
                 g_api->GUI_SendAlert(alertMsg);
             }
         }
-        else
-        {
-            DebugLog("Kill not counted - src (id=%llu) is not self (selfId=%llu, IsSelf=%d)",
-                src ? (unsigned long long)src->ID : 0,
-                (unsigned long long)g_selfId,
-                src ? src->IsSelf : 0);
-        }
 
-        // Check if WE were killed (we are the target)
-        // Method 1: IsSelf flag is set
-        // Method 2: ID matches our stored self ID
+        // Check if WE were killed (we are the target of a killing blow)
+        // Note: Stomp deaths don't trigger KILLINGBLOW, only direct deaths do
         bool isSelfDeath = false;
         if (dst)
         {
             if (dst->IsSelf)
             {
                 isSelfDeath = true;
-                DebugLog("Death detection: dst->IsSelf flag is set");
             }
             else if (g_selfId != 0 && dst->ID == g_selfId)
             {
                 isSelfDeath = true;
-                DebugLog("Death detection: dst->ID matches selfId");
             }
         }
 
         if (isSelfDeath)
         {
-            DebugLog("*** PLAYER DIED! *** Resetting killstreak from %u", g_killCount.load());
             g_killCount.store(0);
             WriteKillcountToFile();
         }
     }
 }
-
-// Note: Settings UI removed - configure output path via:
-// <GW2>/addons/streamlink/settings.txt
-// File should contain a single line with the relative path, e.g.:
-// addons/streamlink/killstreak.txt
 
 ///----------------------------------------------------------------------------------------------------
 /// AddonLoad - Called when addon is loaded
@@ -620,7 +406,7 @@ static void AddonLoad(AddonAPI* aAPI)
     // Load settings
     LoadSettings();
 
-    // Subscribe to ArcDPS combat events (LOCAL only - SQUAD_RAW has IsSelf=0 which breaks kill detection)
+    // Subscribe to ArcDPS combat events
     aAPI->Events_Subscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
 
     // Subscribe to Unofficial Extras squad events (requires ArcdpsIntegration addon)
@@ -633,8 +419,6 @@ static void AddonLoad(AddonAPI* aAPI)
     WriteSquadStatusToFile();
 
     aAPI->Log(ELogLevel_INFO, ADDON_NAME, "Addon loaded successfully.");
-    DebugLog("Killstreak output: %s", GetFullOutputPath().c_str());
-    DebugLog("Squad status output: %s", GetSquadOutputPath().c_str());
 }
 
 ///----------------------------------------------------------------------------------------------------
@@ -648,9 +432,7 @@ static void AddonUnload()
         g_api->Events_Unsubscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
         g_api->Events_Unsubscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
 
-        char msg[64];
-        snprintf(msg, sizeof(msg), "Addon unloaded. Final killstreak: %u", g_killCount.load());
-        g_api->Log(ELogLevel_INFO, ADDON_NAME, msg);
+        g_api->Log(ELogLevel_INFO, ADDON_NAME, "Addon unloaded.");
     }
 
     // Final file writes
