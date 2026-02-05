@@ -441,7 +441,7 @@ static void OnCombatEvent(void* eventArgs)
     // DOWNED = 9: target was downed by skill (logged but not counted)
     if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
     {
-        DebugLog("*** KILL/DOWN EVENT ***: result=%u (%s), src=%s (self=%d, id=%llu, team=%u), dst=%s (team=%u), iff=%d, selfId=%llu",
+        DebugLog("*** KILL/DOWN EVENT ***: result=%u (%s), src=%s (self=%d, id=%llu, team=%u), dst=%s (self=%d, id=%llu, team=%u), iff=%d, selfId=%llu",
             ev->Result,
             ev->Result == ArcDPS::CBTR_KILLINGBLOW ? "KILLINGBLOW" : "DOWNED",
             src && src->Name ? src->Name : "null",
@@ -449,6 +449,8 @@ static void OnCombatEvent(void* eventArgs)
             src ? (unsigned long long)src->ID : 0,
             src ? src->Team : 0,
             dst && dst->Name ? dst->Name : "null",
+            dst ? dst->IsSelf : 0,
+            dst ? (unsigned long long)dst->ID : 0,
             dst ? dst->Team : 0,
             ev->IFF,
             (unsigned long long)g_selfId);
@@ -494,7 +496,24 @@ static void OnCombatEvent(void* eventArgs)
         }
 
         // Check if WE were killed (we are the target)
-        if (dst && dst->IsSelf)
+        // Method 1: IsSelf flag is set
+        // Method 2: ID matches our stored self ID
+        bool isSelfDeath = false;
+        if (dst)
+        {
+            if (dst->IsSelf)
+            {
+                isSelfDeath = true;
+                DebugLog("Death detection: dst->IsSelf flag is set");
+            }
+            else if (g_selfId != 0 && dst->ID == g_selfId)
+            {
+                isSelfDeath = true;
+                DebugLog("Death detection: dst->ID matches selfId");
+            }
+        }
+
+        if (isSelfDeath)
         {
             DebugLog("*** PLAYER DIED! *** Resetting killstreak from %u", g_killCount.load());
             g_killCount.store(0);
