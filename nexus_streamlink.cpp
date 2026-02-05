@@ -15,8 +15,11 @@
 #include <mutex>
 #include <string>
 
+#include <unordered_set>
+
 #include "Nexus.h"
 #include "ArcDPS.h"
+#include "UnofficialExtras.h"
 
 // Note: ImGui UI disabled - configure via settings file at:
 // <GW2>/addons/streamlink/settings.txt
@@ -32,9 +35,12 @@
 // State
 static std::atomic<uint32_t> g_killCount{0};
 static std::atomic<bool> g_inWvW{false};
+static std::atomic<bool> g_inSquad{false};
 static std::mutex g_fileMutex;
 static std::mutex g_debugMutex;
+static std::mutex g_squadMutex;
 static uintptr_t g_selfId = 0;
+static std::unordered_set<std::string> g_squadMembers;
 
 // Nexus API
 static AddonAPI* g_api = nullptr;
@@ -43,17 +49,21 @@ static AddonDefinition g_addonDef = {};
 
 // Settings
 static char g_outputPath[512] = "addons/streamlink/killstreak.txt";
+static char g_squadOutputPath[512] = "addons/streamlink/squad.txt";
 static char g_settingsPath[512] = "";
 
 // Forward declarations
 static void AddonLoad(AddonAPI* aAPI);
 static void AddonUnload();
 static void OnCombatEvent(void* eventArgs);
+static void OnSquadUpdate(void* eventArgs);
 static void WriteKillcountToFile();
+static void WriteSquadStatusToFile();
 static void DebugLog(const char* fmt, ...);
 static void LoadSettings();
 static void SaveSettings();
 static std::string GetFullOutputPath();
+static std::string GetSquadOutputPath();
 
 ///----------------------------------------------------------------------------------------------------
 /// DllMain
@@ -82,8 +92,8 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.APIVersion = NEXUS_API_VERSION;
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
-    g_addonDef.Version.Minor = 0;
-    g_addonDef.Version.Build = 3;
+    g_addonDef.Version.Minor = 1;
+    g_addonDef.Version.Build = 0;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
     g_addonDef.Description = "Tracks WvW killstreaks and writes to file for OBS integration.";
@@ -112,6 +122,25 @@ static std::string GetFullOutputPath()
         fullPath += "\\";
     }
     fullPath += g_outputPath;
+    return fullPath;
+}
+
+///----------------------------------------------------------------------------------------------------
+/// GetSquadOutputPath - Returns the full path to the squad status file
+///----------------------------------------------------------------------------------------------------
+static std::string GetSquadOutputPath()
+{
+    if (!g_api) return g_squadOutputPath;
+
+    const char* gameDir = g_api->Paths_GetGameDirectory();
+    if (!gameDir) return g_squadOutputPath;
+
+    std::string fullPath = gameDir;
+    if (!fullPath.empty() && fullPath.back() != '\\' && fullPath.back() != '/')
+    {
+        fullPath += "\\";
+    }
+    fullPath += g_squadOutputPath;
     return fullPath;
 }
 
@@ -219,6 +248,75 @@ static void WriteKillcountToFile()
     {
         fprintf(f, "%u", g_killCount.load());
         fclose(f);
+    }
+}
+
+///----------------------------------------------------------------------------------------------------
+/// WriteSquadStatusToFile - Write current squad status (0 or 1) to output file
+///----------------------------------------------------------------------------------------------------
+static void WriteSquadStatusToFile()
+{
+    std::lock_guard<std::mutex> lock(g_fileMutex);
+
+    std::string fullPath = GetSquadOutputPath();
+
+    // Ensure directory exists
+    std::string dirPath = fullPath.substr(0, fullPath.find_last_of("\\/"));
+    CreateDirectoryA(dirPath.c_str(), nullptr);
+
+    FILE* f = nullptr;
+    if (fopen_s(&f, fullPath.c_str(), "w") == 0 && f)
+    {
+        fprintf(f, "%u", g_inSquad.load() ? 1 : 0);
+        fclose(f);
+    }
+}
+
+///----------------------------------------------------------------------------------------------------
+/// OnSquadUpdate - Handle Unofficial Extras squad update events via Nexus
+/// Requires: ArcDPS, Unofficial Extras, and GW2-ArcdpsIntegration addons
+///----------------------------------------------------------------------------------------------------
+static void OnSquadUpdate(void* eventArgs)
+{
+    if (!eventArgs) return;
+
+    EvSquadUpdate* data = static_cast<EvSquadUpdate*>(eventArgs);
+    if (!data->UpdatedUsers || data->UpdatedUsersCount == 0) return;
+
+    std::lock_guard<std::mutex> lock(g_squadMutex);
+
+    for (uint64_t i = 0; i < data->UpdatedUsersCount; i++)
+    {
+        const UnofficialExtras::UserInfo& user = data->UpdatedUsers[i];
+        if (!user.AccountName) continue;
+
+        std::string accountName(user.AccountName);
+
+        if (user.Role != UnofficialExtras::UserRole::None &&
+            user.Role != UnofficialExtras::UserRole::Invalid)
+        {
+            // User joined or is in squad
+            g_squadMembers.insert(accountName);
+            DebugLog("Squad member added: %s (role=%u, subgroup=%u)",
+                accountName.c_str(), static_cast<uint8_t>(user.Role), user.Subgroup);
+        }
+        else
+        {
+            // User left squad
+            g_squadMembers.erase(accountName);
+            DebugLog("Squad member removed: %s", accountName.c_str());
+        }
+    }
+
+    bool wasInSquad = g_inSquad.load();
+    bool nowInSquad = !g_squadMembers.empty();
+
+    if (wasInSquad != nowInSquad)
+    {
+        g_inSquad.store(nowInSquad);
+        DebugLog("Squad status changed: %s (members: %zu)",
+            nowInSquad ? "IN SQUAD" : "NOT IN SQUAD", g_squadMembers.size());
+        WriteSquadStatusToFile();
     }
 }
 
@@ -423,12 +521,18 @@ static void AddonLoad(AddonAPI* aAPI)
     // Subscribe to ArcDPS combat events
     aAPI->Events_Subscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
 
-    // Initialize kill count file
+    // Subscribe to Unofficial Extras squad events (requires ArcdpsIntegration addon)
+    aAPI->Events_Subscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
+
+    // Initialize output files
     g_killCount.store(0);
+    g_inSquad.store(false);
     WriteKillcountToFile();
+    WriteSquadStatusToFile();
 
     aAPI->Log(ELogLevel_INFO, ADDON_NAME, "Addon loaded successfully.");
-    DebugLog("Output path: %s", GetFullOutputPath().c_str());
+    DebugLog("Killstreak output: %s", GetFullOutputPath().c_str());
+    DebugLog("Squad status output: %s", GetSquadOutputPath().c_str());
 }
 
 ///----------------------------------------------------------------------------------------------------
@@ -440,14 +544,22 @@ static void AddonUnload()
     {
         // Unsubscribe from events
         g_api->Events_Unsubscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
+        g_api->Events_Unsubscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
 
         char msg[64];
         snprintf(msg, sizeof(msg), "Addon unloaded. Final killstreak: %u", g_killCount.load());
         g_api->Log(ELogLevel_INFO, ADDON_NAME, msg);
     }
 
-    // Final file write
+    // Final file writes
     WriteKillcountToFile();
+    WriteSquadStatusToFile();
+
+    // Clear squad members
+    {
+        std::lock_guard<std::mutex> lock(g_squadMutex);
+        g_squadMembers.clear();
+    }
 
     g_api = nullptr;
 }
