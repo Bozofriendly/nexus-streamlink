@@ -309,8 +309,8 @@ static void OnCombatEvent(void* eventArgs)
                 break;
 
             case ArcDPS::CBTS_CHANGEDEAD:
-                // Check if WE died
-                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
+                // Check if WE died (WvW only - don't let PvE deaths reset streak)
+                if (g_inWvW.load() && src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
                 {
                     g_killCount.store(0);
                     WriteKillcountToFile();
@@ -336,14 +336,19 @@ static void OnCombatEvent(void* eventArgs)
                         g_killCount.store(0);
                         WriteKillcountToFile();
                     }
+                    else if (wasInWvW && !isWvWMap)
+                    {
+                        g_killCount.store(0);
+                        WriteKillcountToFile();
+                    }
                 }
                 break;
         }
         return;
     }
 
-    // Check for killing blow
-    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
+    // Check for killing blow (WvW only)
+    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW && g_inWvW.load())
     {
         // Check if WE dealt the killing blow
         bool isSelfKill = false;
