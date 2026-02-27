@@ -283,12 +283,6 @@ static void OnCombatEvent(void* eventArgs)
         if (src && src->IsSelf)
         {
             g_selfId = src->ID;
-
-            // Detect WvW from team ID (teams 9+ are WvW teams)
-            if (src->Team >= 9 && !g_inWvW.load())
-            {
-                g_inWvW.store(true);
-            }
         }
         return;
     }
@@ -299,13 +293,6 @@ static void OnCombatEvent(void* eventArgs)
         switch (ev->IsStatechange)
         {
             case ArcDPS::CBTS_ENTERCOMBAT:
-                if (src && src->IsSelf)
-                {
-                    if (src->Team >= 9 && !g_inWvW.load())
-                    {
-                        g_inWvW.store(true);
-                    }
-                }
                 break;
 
             case ArcDPS::CBTS_CHANGEDEAD:
