@@ -28,14 +28,44 @@
 // Negative signature for non-Raidcore hosted addons (cast to uint32_t)
 #define ADDON_SIGNATURE static_cast<uint32_t>(-0xB020F1)
 
+// MumbleLink structures for reading GW2 game state
+struct MumbleContext
+{
+    unsigned char serverAddress[28];
+    uint32_t      mapId;
+    uint32_t      mapType;
+    uint32_t      shardId;
+    uint32_t      instance;
+    uint32_t      buildId;
+};
+
+struct LinkedMem
+{
+    uint32_t uiVersion;
+    uint32_t uiTick;
+    float    fAvatarPosition[3];
+    float    fAvatarFront[3];
+    float    fAvatarTop[3];
+    wchar_t  name[256];
+    float    fCameraPosition[3];
+    float    fCameraFront[3];
+    float    fCameraTop[3];
+    wchar_t  identity[256];
+    uint32_t context_len;
+    unsigned char context[256];
+};
+
 // State
 static std::atomic<uint32_t> g_killCount{0};
-static std::atomic<bool> g_inWvW{false};
 static std::atomic<bool> g_inSquad{false};
 static std::mutex g_fileMutex;
 static std::mutex g_squadMutex;
 static uintptr_t g_selfId = 0;
 static std::unordered_set<std::string> g_squadMembers;
+
+// MumbleLink
+static HANDLE g_mumbleHandle = nullptr;
+static LinkedMem* g_mumbleLink = nullptr;
 
 // Nexus API
 static AddonAPI* g_api = nullptr;
@@ -57,6 +87,30 @@ static void WriteSquadStatusToFile();
 static void LoadSettings();
 static std::string GetFullOutputPath();
 static std::string GetSquadOutputPath();
+
+///----------------------------------------------------------------------------------------------------
+/// IsInWvW - Check if player is in WvW via MumbleLink shared memory
+///----------------------------------------------------------------------------------------------------
+static bool IsInWvW()
+{
+    if (!g_mumbleLink || g_mumbleLink->uiTick == 0)
+        return false;
+
+    const MumbleContext* ctx = reinterpret_cast<const MumbleContext*>(g_mumbleLink->context);
+    // WvW mapType values: 9=EB, 10=Blue BL, 11=Green BL, 12=Red BL, 14=Obsidian Sanctum, 15=EotM
+    switch (ctx->mapType)
+    {
+        case 9:
+        case 10:
+        case 11:
+        case 12:
+        case 14:
+        case 15:
+            return true;
+        default:
+            return false;
+    }
+}
 
 ///----------------------------------------------------------------------------------------------------
 /// DllMain
@@ -292,50 +346,20 @@ static void OnCombatEvent(void* eventArgs)
     {
         switch (ev->IsStatechange)
         {
-            case ArcDPS::CBTS_ENTERCOMBAT:
-                break;
-
             case ArcDPS::CBTS_CHANGEDEAD:
-                // Check if WE died (WvW only - don't let PvE deaths reset streak)
-                if (g_inWvW.load() && src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
+                // Check if WE died in WvW
+                if (IsInWvW() && src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
                 {
                     g_killCount.store(0);
                     WriteKillcountToFile();
-                }
-                break;
-
-            case ArcDPS::CBTS_MAPID:
-                {
-                    uint32_t mapId = static_cast<uint32_t>(ev->SourceAgent);
-                    bool isWvWMap = (mapId == 38) ||                    // Eternal Battlegrounds
-                                   (mapId >= 94 && mapId <= 96) ||     // Borderlands
-                                   (mapId == 1099) ||                   // Obsidian Sanctum
-                                   (mapId == 1143) ||                   // Edge of the Mists
-                                   (mapId == 968) ||                    // Armistice Bastion
-                                   (mapId == 1206) ||                   // Alpine Borderlands
-                                   (mapId == 1323);                     // Desert Borderlands variant
-
-                    bool wasInWvW = g_inWvW.load();
-                    g_inWvW.store(isWvWMap);
-
-                    if (!wasInWvW && isWvWMap)
-                    {
-                        g_killCount.store(0);
-                        WriteKillcountToFile();
-                    }
-                    else if (wasInWvW && !isWvWMap)
-                    {
-                        g_killCount.store(0);
-                        WriteKillcountToFile();
-                    }
                 }
                 break;
         }
         return;
     }
 
-    // Check for killing blow (WvW only)
-    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW && g_inWvW.load())
+    // Check for killing blow (WvW only via MumbleLink)
+    if (ev->Result == ArcDPS::CBTR_KILLINGBLOW && IsInWvW())
     {
         // Check if WE dealt the killing blow
         bool isSelfKill = false;
@@ -395,6 +419,27 @@ static void AddonLoad(AddonAPI* aAPI)
 {
     g_api = aAPI;
 
+    // Open MumbleLink shared memory for WvW detection
+    g_mumbleHandle = OpenFileMappingW(FILE_MAP_READ, FALSE, L"MumbleLink");
+    if (g_mumbleHandle)
+    {
+        g_mumbleLink = static_cast<LinkedMem*>(MapViewOfFile(g_mumbleHandle, FILE_MAP_READ, 0, 0, sizeof(LinkedMem)));
+        if (g_mumbleLink)
+        {
+            aAPI->Log(ELogLevel_INFO, ADDON_NAME, "MumbleLink connected.");
+        }
+        else
+        {
+            CloseHandle(g_mumbleHandle);
+            g_mumbleHandle = nullptr;
+            aAPI->Log(ELogLevel_WARNING, ADDON_NAME, "MumbleLink: MapViewOfFile failed.");
+        }
+    }
+    else
+    {
+        aAPI->Log(ELogLevel_WARNING, ADDON_NAME, "MumbleLink: shared memory not found.");
+    }
+
     // Load settings
     LoadSettings();
 
@@ -425,6 +470,18 @@ static void AddonUnload()
         g_api->Events_Unsubscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
 
         g_api->Log(ELogLevel_INFO, ADDON_NAME, "Addon unloaded.");
+    }
+
+    // Clean up MumbleLink
+    if (g_mumbleLink)
+    {
+        UnmapViewOfFile(g_mumbleLink);
+        g_mumbleLink = nullptr;
+    }
+    if (g_mumbleHandle)
+    {
+        CloseHandle(g_mumbleHandle);
+        g_mumbleHandle = nullptr;
     }
 
     // Final file writes
