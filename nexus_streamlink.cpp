@@ -112,7 +112,7 @@ static bool IsInWvW()
     }
 
     // Armistice Bastion (WvW lounge) has a different mapType but is WvW-adjacent
-    if (ctx->mapId == 968)
+    if (ctx->mapId == 1315)
         return true;
 
     return false;
