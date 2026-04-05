@@ -394,15 +394,21 @@ static void OnCombatEvent(void* eventArgs)
 
         if (isSelfKill)
         {
-            uint32_t newCount = g_killCount.fetch_add(1) + 1;
-            WriteKillcountToFile();
-
-            // Send alert for milestones
-            if (g_api && (newCount == 5 || newCount == 10 || newCount == 25 || newCount == 50 || newCount == 100))
+            // Only count kills against enemy players, not NPCs
+            // In arcDPS, Profession is 1-9 for players, species ID (>9) for NPCs
+            bool dstIsPlayer = (dst && dst->Profession >= 1 && dst->Profession <= 9);
+            if (dstIsPlayer)
             {
-                char alertMsg[64];
-                snprintf(alertMsg, sizeof(alertMsg), "Killstreak: %u!", newCount);
-                g_api->GUI_SendAlert(alertMsg);
+                uint32_t newCount = g_killCount.fetch_add(1) + 1;
+                WriteKillcountToFile();
+
+                // Send alert for milestones
+                if (g_api && (newCount == 5 || newCount == 10 || newCount == 25 || newCount == 50 || newCount == 100))
+                {
+                    char alertMsg[64];
+                    snprintf(alertMsg, sizeof(alertMsg), "Killstreak: %u!", newCount);
+                    g_api->GUI_SendAlert(alertMsg);
+                }
             }
         }
 
