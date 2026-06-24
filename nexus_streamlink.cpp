@@ -62,6 +62,7 @@ static std::mutex g_fileMutex;
 static std::mutex g_squadMutex;
 static uintptr_t g_selfId = 0;
 static std::unordered_set<std::string> g_squadMembers;
+static const char* g_playerStatus = "alive";
 
 // MumbleLink
 static HANDLE g_mumbleHandle = nullptr;
@@ -75,6 +76,7 @@ static AddonDefinition g_addonDef = {};
 // Settings
 static char g_outputPath[512] = "addons/streamlink/killstreak.txt";
 static char g_squadOutputPath[512] = "addons/streamlink/squad.txt";
+static char g_playerStatusPath[512] = "addons/streamlink/playerstatus.txt";
 static char g_settingsPath[512] = "";
 
 // Forward declarations
@@ -84,9 +86,11 @@ static void OnCombatEvent(void* eventArgs);
 static void OnSquadUpdate(void* eventArgs);
 static void WriteKillcountToFile();
 static void WriteSquadStatusToFile();
+static void WritePlayerStatusToFile();
 static void LoadSettings();
 static std::string GetFullOutputPath();
 static std::string GetSquadOutputPath();
+static std::string GetPlayerStatusOutputPath();
 
 ///----------------------------------------------------------------------------------------------------
 /// IsInWvW - Check if player is in WvW via MumbleLink shared memory
@@ -198,6 +202,25 @@ static std::string GetSquadOutputPath()
 }
 
 ///----------------------------------------------------------------------------------------------------
+/// GetPlayerStatusOutputPath - Returns the full path to the player status file
+///----------------------------------------------------------------------------------------------------
+static std::string GetPlayerStatusOutputPath()
+{
+    if (!g_api) return g_playerStatusPath;
+
+    const char* gameDir = g_api->Paths_GetGameDirectory();
+    if (!gameDir) return g_playerStatusPath;
+
+    std::string fullPath = gameDir;
+    if (!fullPath.empty() && fullPath.back() != '\\' && fullPath.back() != '/')
+    {
+        fullPath += "\\";
+    }
+    fullPath += g_playerStatusPath;
+    return fullPath;
+}
+
+///----------------------------------------------------------------------------------------------------
 /// GetSettingsPath - Returns the path to the settings file
 ///----------------------------------------------------------------------------------------------------
 static std::string GetSettingsPath()
@@ -286,6 +309,27 @@ static void WriteSquadStatusToFile()
 }
 
 ///----------------------------------------------------------------------------------------------------
+/// WritePlayerStatusToFile - Write current player status (alive/downed/dead) to output file
+///----------------------------------------------------------------------------------------------------
+static void WritePlayerStatusToFile()
+{
+    std::lock_guard<std::mutex> lock(g_fileMutex);
+
+    std::string fullPath = GetPlayerStatusOutputPath();
+
+    // Ensure directory exists
+    std::string dirPath = fullPath.substr(0, fullPath.find_last_of("\\/"));
+    CreateDirectoryA(dirPath.c_str(), nullptr);
+
+    FILE* f = nullptr;
+    if (fopen_s(&f, fullPath.c_str(), "w") == 0 && f)
+    {
+        fprintf(f, "%s", g_playerStatus);
+        fclose(f);
+    }
+}
+
+///----------------------------------------------------------------------------------------------------
 /// OnSquadUpdate - Handle Unofficial Extras squad update events via Nexus
 ///----------------------------------------------------------------------------------------------------
 static void OnSquadUpdate(void* eventArgs)
@@ -352,12 +396,31 @@ static void OnCombatEvent(void* eventArgs)
     {
         switch (ev->IsStatechange)
         {
+            case ArcDPS::CBTS_CHANGEUP:
+                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
+                {
+                    g_playerStatus = "alive";
+                    WritePlayerStatusToFile();
+                }
+                break;
             case ArcDPS::CBTS_CHANGEDEAD:
                 // Check if WE died in WvW
-                if (IsInWvW() && src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
+                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
                 {
-                    g_killCount.store(0);
-                    WriteKillcountToFile();
+                    g_playerStatus = "dead";
+                    WritePlayerStatusToFile();
+                    if (IsInWvW())
+                    {
+                        g_killCount.store(0);
+                        WriteKillcountToFile();
+                    }
+                }
+                break;
+            case ArcDPS::CBTS_CHANGEDOWN:
+                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
+                {
+                    g_playerStatus = "downed";
+                    WritePlayerStatusToFile();
                 }
                 break;
         }
@@ -479,8 +542,10 @@ static void AddonLoad(AddonAPI* aAPI)
     // Initialize output files
     g_killCount.store(0);
     g_inSquad.store(false);
+    g_playerStatus = "alive";
     WriteKillcountToFile();
     WriteSquadStatusToFile();
+    WritePlayerStatusToFile();
 
     aAPI->Log(ELogLevel_INFO, ADDON_NAME, "Addon loaded successfully.");
 }
@@ -514,6 +579,7 @@ static void AddonUnload()
     // Final file writes
     WriteKillcountToFile();
     WriteSquadStatusToFile();
+    WritePlayerStatusToFile();
 
     // Clear squad members
     {
