@@ -83,6 +83,7 @@ static char g_settingsPath[512] = "";
 static void AddonLoad(AddonAPI* aAPI);
 static void AddonUnload();
 static void OnCombatEvent(void* eventArgs);
+static void OnSquadCombatEvent(void* eventArgs);
 static void OnSquadUpdate(void* eventArgs);
 static void WriteKillcountToFile();
 static void WriteSquadStatusToFile();
@@ -391,64 +392,9 @@ static void OnCombatEvent(void* eventArgs)
         return;
     }
 
-    // Handle state changes
+    // State change events don't come through LOCAL_RAW, handled in OnSquadCombatEvent
     if (ev->IsStatechange)
-    {
-        if (g_api)
-        {
-            char logMsg[128];
-            snprintf(logMsg, sizeof(logMsg), "StateChange event received: type=%u", (unsigned)ev->IsStatechange);
-            g_api->Log(ELogLevel_DEBUG, ADDON_NAME, logMsg);
-        }
-        switch (ev->IsStatechange)
-        {
-            case ArcDPS::CBTS_CHANGEUP:
-            case ArcDPS::CBTS_CHANGEDEAD:
-            case ArcDPS::CBTS_CHANGEDOWN:
-            {
-                if (g_api)
-                {
-                    char logMsg[256];
-                    snprintf(logMsg, sizeof(logMsg),
-                        "StateChange=%u src=%s srcID=%llu IsSelf=%u g_selfId=%llu",
-                        ev->IsStatechange,
-                        (src && src->Name) ? src->Name : "null",
-                        (unsigned long long)(src ? src->ID : 0),
-                        (unsigned)(src ? src->IsSelf : 0),
-                        (unsigned long long)g_selfId);
-                    g_api->Log(ELogLevel_DEBUG, ADDON_NAME, logMsg);
-                }
-
-                bool isSelf = src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId));
-                if (isSelf)
-                {
-                    if (ev->IsStatechange == ArcDPS::CBTS_CHANGEUP)
-                        g_playerStatus = "alive";
-                    else if (ev->IsStatechange == ArcDPS::CBTS_CHANGEDOWN)
-                        g_playerStatus = "downed";
-                    else if (ev->IsStatechange == ArcDPS::CBTS_CHANGEDEAD)
-                    {
-                        g_playerStatus = "dead";
-                        if (IsInWvW())
-                        {
-                            g_killCount.store(0);
-                            WriteKillcountToFile();
-                        }
-                    }
-                    WritePlayerStatusToFile();
-
-                    if (g_api)
-                    {
-                        char logMsg[128];
-                        snprintf(logMsg, sizeof(logMsg), "Player status changed to: %s", g_playerStatus);
-                        g_api->Log(ELogLevel_INFO, ADDON_NAME, logMsg);
-                    }
-                }
-                break;
-            }
-        }
         return;
-    }
 
     // Check for killing blow (WvW only via MumbleLink)
     if (ev->Result == ArcDPS::CBTR_KILLINGBLOW)
@@ -522,6 +468,57 @@ static void OnCombatEvent(void* eventArgs)
 }
 
 ///----------------------------------------------------------------------------------------------------
+/// OnSquadCombatEvent - Handle ArcDPS squad combat events (state changes come through here)
+///----------------------------------------------------------------------------------------------------
+static void OnSquadCombatEvent(void* eventArgs)
+{
+    if (!eventArgs) return;
+
+    EvCombatData* data = static_cast<EvCombatData*>(eventArgs);
+    ArcDPS::CombatEvent* ev = data->ev;
+    ArcDPS::AgentShort* src = data->src;
+
+    if (!ev) return;
+
+    // Only handle state changes here
+    if (!ev->IsStatechange) return;
+
+    switch (ev->IsStatechange)
+    {
+        case ArcDPS::CBTS_CHANGEUP:
+        case ArcDPS::CBTS_CHANGEDEAD:
+        case ArcDPS::CBTS_CHANGEDOWN:
+        {
+            bool isSelf = src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId));
+            if (!isSelf) break;
+
+            if (ev->IsStatechange == ArcDPS::CBTS_CHANGEUP)
+                g_playerStatus = "alive";
+            else if (ev->IsStatechange == ArcDPS::CBTS_CHANGEDOWN)
+                g_playerStatus = "downed";
+            else if (ev->IsStatechange == ArcDPS::CBTS_CHANGEDEAD)
+            {
+                g_playerStatus = "dead";
+                if (IsInWvW())
+                {
+                    g_killCount.store(0);
+                    WriteKillcountToFile();
+                }
+            }
+            WritePlayerStatusToFile();
+
+            if (g_api)
+            {
+                char logMsg[128];
+                snprintf(logMsg, sizeof(logMsg), "Player status changed to: %s", g_playerStatus);
+                g_api->Log(ELogLevel_INFO, ADDON_NAME, logMsg);
+            }
+            break;
+        }
+    }
+}
+
+///----------------------------------------------------------------------------------------------------
 /// AddonLoad - Called when addon is loaded
 ///----------------------------------------------------------------------------------------------------
 static void AddonLoad(AddonAPI* aAPI)
@@ -558,6 +555,7 @@ static void AddonLoad(AddonAPI* aAPI)
 
     // Subscribe to ArcDPS combat events
     aAPI->Events_Subscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
+    aAPI->Events_Subscribe(EV_ARCDPS_COMBATEVENT_SQUAD_RAW, OnSquadCombatEvent);
 
     // Subscribe to Unofficial Extras squad events (requires ArcdpsIntegration addon)
     aAPI->Events_Subscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
@@ -582,6 +580,7 @@ static void AddonUnload()
     {
         // Unsubscribe from events
         g_api->Events_Unsubscribe(EV_ARCDPS_COMBATEVENT_LOCAL_RAW, OnCombatEvent);
+        g_api->Events_Unsubscribe(EV_ARCDPS_COMBATEVENT_SQUAD_RAW, OnSquadCombatEvent);
         g_api->Events_Unsubscribe(EV_UNOFFICIAL_EXTRAS_SQUAD_UPDATE, OnSquadUpdate);
 
         g_api->Log(ELogLevel_INFO, ADDON_NAME, "Addon unloaded.");
