@@ -397,32 +397,49 @@ static void OnCombatEvent(void* eventArgs)
         switch (ev->IsStatechange)
         {
             case ArcDPS::CBTS_CHANGEUP:
-                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
-                {
-                    g_playerStatus = "alive";
-                    WritePlayerStatusToFile();
-                }
-                break;
             case ArcDPS::CBTS_CHANGEDEAD:
-                // Check if WE died in WvW
-                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
+            case ArcDPS::CBTS_CHANGEDOWN:
+            {
+                if (g_api)
                 {
-                    g_playerStatus = "dead";
-                    WritePlayerStatusToFile();
-                    if (IsInWvW())
+                    char logMsg[256];
+                    snprintf(logMsg, sizeof(logMsg),
+                        "StateChange=%u src=%s srcID=%llu IsSelf=%u g_selfId=%llu",
+                        ev->IsStatechange,
+                        (src && src->Name) ? src->Name : "null",
+                        (unsigned long long)(src ? src->ID : 0),
+                        (unsigned)(src ? src->IsSelf : 0),
+                        (unsigned long long)g_selfId);
+                    g_api->Log(ELogLevel_DEBUG, ADDON_NAME, logMsg);
+                }
+
+                bool isSelf = src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId));
+                if (isSelf)
+                {
+                    if (ev->IsStatechange == ArcDPS::CBTS_CHANGEUP)
+                        g_playerStatus = "alive";
+                    else if (ev->IsStatechange == ArcDPS::CBTS_CHANGEDOWN)
+                        g_playerStatus = "downed";
+                    else if (ev->IsStatechange == ArcDPS::CBTS_CHANGEDEAD)
                     {
-                        g_killCount.store(0);
-                        WriteKillcountToFile();
+                        g_playerStatus = "dead";
+                        if (IsInWvW())
+                        {
+                            g_killCount.store(0);
+                            WriteKillcountToFile();
+                        }
+                    }
+                    WritePlayerStatusToFile();
+
+                    if (g_api)
+                    {
+                        char logMsg[128];
+                        snprintf(logMsg, sizeof(logMsg), "Player status changed to: %s", g_playerStatus);
+                        g_api->Log(ELogLevel_INFO, ADDON_NAME, logMsg);
                     }
                 }
                 break;
-            case ArcDPS::CBTS_CHANGEDOWN:
-                if (src && (src->IsSelf || (g_selfId != 0 && src->ID == g_selfId)))
-                {
-                    g_playerStatus = "downed";
-                    WritePlayerStatusToFile();
-                }
-                break;
+            }
         }
         return;
     }
