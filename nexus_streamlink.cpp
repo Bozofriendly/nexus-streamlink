@@ -478,7 +478,20 @@ static void OnSquadCombatEvent(void* eventArgs)
     ArcDPS::CombatEvent* ev = data->ev;
     ArcDPS::AgentShort* src = data->src;
 
-    if (!ev) return;
+    if (!ev)
+    {
+        if (g_api)
+            g_api->Log(ELogLevel_DEBUG, ADDON_NAME, "SQUAD_RAW: null ev (agent tracking)");
+        return;
+    }
+
+    if (g_api)
+    {
+        char logMsg[128];
+        snprintf(logMsg, sizeof(logMsg), "SQUAD_RAW: statechange=%u result=%u",
+                 (unsigned)ev->IsStatechange, (unsigned)ev->Result);
+        g_api->Log(ELogLevel_DEBUG, ADDON_NAME, logMsg);
+    }
 
     // Only handle state changes here
     if (!ev->IsStatechange) return;
