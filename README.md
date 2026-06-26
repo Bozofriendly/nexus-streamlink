@@ -26,18 +26,8 @@ All files are located in `<GW2 Install>/addons/streamlink/` by default.
 | File | Content | Description |
 |------|---------|-------------|
 | `killstreak.txt` | `0`, `1`, `2`, ... | Current WvW killstreak count. Resets to `0` on death. |
-| `squad.txt` | `0` or `1` | `1` if you are in a squad, `0` if not. |
+| `squad.txt` | `0` or `1` | `1` if you are in a squad or party, `0` if not. |
 | `playerstatus.txt` | `alive`, `downed`, or `dead` | Your character's current alive state. Works in all game modes. |
-
-## OBS Setup
-
-1. Add a "Text (GDI+)" source
-2. Check "Read from file"
-3. Browse to the desired file in `<GW2 Install>/addons/streamlink/`
-4. Style as desired
-
-Repeat for each file you want to display on stream.
-
 ## How It Works
 
 - **Kill Detection**: Uses the `KILLINGBLOW` combat result from ArcDPS local events to detect when you personally kill an enemy player
