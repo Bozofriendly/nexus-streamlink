@@ -394,6 +394,12 @@ static void OnCombatEvent(void* eventArgs)
     // Handle state changes
     if (ev->IsStatechange)
     {
+        if (g_api)
+        {
+            char logMsg[128];
+            snprintf(logMsg, sizeof(logMsg), "StateChange event received: type=%u", (unsigned)ev->IsStatechange);
+            g_api->Log(ELogLevel_DEBUG, ADDON_NAME, logMsg);
+        }
         switch (ev->IsStatechange)
         {
             case ArcDPS::CBTS_CHANGEUP:
