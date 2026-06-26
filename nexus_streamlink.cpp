@@ -150,7 +150,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
     g_addonDef.APIVersion = NEXUS_API_VERSION;
     g_addonDef.Name = ADDON_NAME;
     g_addonDef.Version.Major = 2;
-    g_addonDef.Version.Minor = 4;
+    g_addonDef.Version.Minor = 5;
     g_addonDef.Version.Build = 0;
     g_addonDef.Version.Revision = 0;
     g_addonDef.Author = "Bozo";
